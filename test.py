@@ -52,7 +52,7 @@ def extract_8x8_squares(frame, full_corners):
 # =========================
 phone_ip="192.168.0.90"
 wifi_url = f'http://{phone_ip}:4747/video' 
-cap = cv2.VideoCapture(wifi_url) //he4i li lezmek tbadalha akel url_wifi
+cap = cv2.VideoCapture(wifi_url) #he4i li lezmek tbadalha akel url_wifi
 #cap = cv2.VideoCapture(0)
 pattern_size = (7, 7)
 
