@@ -7,7 +7,7 @@ from advanced_test import analyze_board_state, display_board_state, extract_8x8_
 
 def main():
     # Camera setup
-    cap = cv2.VideoCapture(1)
+    cap = cv2.VideoCapture(0)
 
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
@@ -39,7 +39,7 @@ def main():
         cv2.imshow("HSV : ", cv2.cvtColor(frame, cv2.COLOR_BGR2HSV))
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         cv2.imshow("gray : ", gray)
-        cv2.imshow("edged", cv2.Canny(cv2.GaussianBlur(gray, (3, 3), 0), 50, 150))
+        cv2.imshow("edged", cv2.Canny(cv2.GaussianBlur(gray, (9, 9), 0), 50, 150))
 
         # Detect chessboard
         found, corners = cv2.findChessboardCorners(
@@ -96,7 +96,8 @@ def main():
 
             status = "BOARD LOCKED"
             color = (0, 255, 0)
-
+            for square_name in ["e4", "d5", "a1", "h8"]:
+                cv2.imshow(f"Square {square_name}", squares[square_name])
         else:
             status = "CALIBRATING (Move board if needed)"
             color = (0, 165, 255)
@@ -119,8 +120,7 @@ def main():
             full_corners = None
             board_state = {}
             print("🔄 Reset. Show board again for calibration.")
-        for square_name in ["e4", "d5", "a1", "h8"]:
-            cv2.imshow(f"Square {square_name}",squares[square_name] )
+
 
     cap.release()
     cv2.destroyAllWindows()

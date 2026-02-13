@@ -102,10 +102,14 @@ def detect_piece_in_square(square_img, square_name):
     blur = cv2.GaussianBlur(gray,(5,5), 0 )
     # Apply edge detection
     edges = cv2.Canny(blur, 50, 150)
-    cv2.imshow("edges : ",edges)
+    #cv2.imshow(f"edges de {square_name}: ",edges)
     # Calculate edge density (pieces have more edges)
+    contours, hierarchies = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
     edge_density = np.sum(edges > 0) / edges.size
-
+    if square_name == "e4" :
+        print("Edges is equal : ", edge_density)
+        print("Contours = ", len(contours))
+        cv2.imshow("e4 edges : ", edges)
     # Method 2: Check for color contrast with square
     # Empty squares have more uniform color
     std_color = np.std(square_img, axis=(0, 1))
@@ -120,18 +124,18 @@ def detect_piece_in_square(square_img, square_name):
     confidence = 0.0
 
     # Edge-based detection
-    if edge_density > 0.05:  # Piece has more edges
+    if len(contours) > 4:  # Piece has more edges
         has_piece = True
         confidence += 0.4
 
     # Color variation detection
     if color_variation > 15:  # Piece has more color variation
-        has_piece = True
+        #has_piece = True
         confidence += 0.3
 
     # Brightness variation detection
     if brightness_std > 20:  # Piece has more brightness variation
-        has_piece = True
+        #has_piece = True
         confidence += 0.3
 
     confidence = min(confidence, 1.0)
@@ -198,9 +202,9 @@ def detect_piece_color(square_region, square_color):
     # - Balanced RGB (not too much of any color)
     is_white = (
             avg_brightness > 100 and  # Bright
-            avg_saturation < 80 and  # Desaturated
-            abs(avg_r - avg_g) < 30 and  # Balanced colors
-            abs(avg_g - avg_b) < 30 and
+            avg_saturation < 90 and  # Desaturated
+            abs(avg_r - avg_g) < 25 and  # Balanced colors
+            abs(avg_g - avg_b) < 35 and
             brightness_std > 15  # Some variation (not uniform)
     )
 
@@ -210,9 +214,12 @@ def detect_piece_color(square_region, square_color):
     # - Often blue/red tint for dark pieces
     is_black = (
             avg_brightness < 80 and  # Dark
-            brightness_std > 20 and  # More variation
-            (avg_saturation > 50 or  # Either saturated color
-             avg_value < 70)  # Or very dark
+            avg_saturation >120 and  # Saturated
+            abs(avg_r - avg_g) > 10 and  # Balanced colors
+            abs(avg_g - avg_b) > 20
+            #brightness_std > 20 #and  # More variation
+            #(avg_saturation > 120 or  # Either saturated color
+            # avg_value < 70)  # Or very dark
     )
 
     if is_white and not is_black:
@@ -221,9 +228,9 @@ def detect_piece_color(square_region, square_color):
         return 'black'
 
     # Fallback logic based on brightness
-    if avg_brightness > 120:
+    if avg_brightness > 100:
         return 'white'
-    elif avg_brightness < 60:
+    elif avg_brightness < 80:
         return 'black'
     else:
         return 'unknown'
@@ -419,7 +426,7 @@ def main():
             cv2.CALIB_CB_FILTER_QUADS +
             cv2.CALIB_CB_FAST_CHECK
         )
-
+    while True:
         if found:
             # Refine corners
             corners = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
@@ -479,6 +486,11 @@ def main():
                                     (255, 255, 0), 1)
 
                     cv2.imshow(f"Square {square_name}", square_display)
+            #for square_name in squares :
+            #    square_display = cv2.resize(squares[square_name], (200, 200))
+            #    blur = cv2.GaussianBlur(cv2.cvtColor(square_display, cv2.COLOR_BGR2GRAY), (5, 5), 0)
+            #    square_canny= cv2.Canny(blur, 50, 150)
+            #    cv2.imshow(f"Square {square_name}", square_canny)
 
             # Add board statistics overlay
             white_count = sum(1 for info in board_state.values()
