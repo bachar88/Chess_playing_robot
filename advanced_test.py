@@ -69,7 +69,7 @@ def extract_8x8_squares(frame, full_corners):
     return squares, squares_info
 
 
-def detect_piece_in_square(square_img, square_name):
+def detect_piece_in_square(square_img, square_name,max_cont):
     """
     Detect if a piece is present in a square and determine its color
     Returns: (has_piece, piece_color, confidence)
@@ -107,8 +107,6 @@ def detect_piece_in_square(square_img, square_name):
     contours, hierarchies = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
     edge_density = np.sum(edges > 0) / edges.size
     if square_name == "e4" :
-        print("Edges is equal : ", edge_density)
-        print("Contours = ", len(contours))
         cv2.imshow("e4 edges : ", edges)
     # Method 2: Check for color contrast with square
     # Empty squares have more uniform color
@@ -124,7 +122,7 @@ def detect_piece_in_square(square_img, square_name):
     confidence = 0.0
 
     # Edge-based detection
-    if len(contours) > 4:  # Piece has more edges
+    if len(contours) > max_cont:  # Piece has more edges
         has_piece = True
         confidence += 0.4
 
@@ -144,7 +142,10 @@ def detect_piece_in_square(square_img, square_name):
         return False, None, 0.0
 
     # Determine piece color (white or black)
-    piece_color = detect_piece_color(center_region, square_color)
+    print("square_name : ", square_name)
+    piece_color = detect_piece_color_debug(center_region,square_name)
+    if piece_color == "unknown" :
+        return False, None, 0.0
 
     return True, piece_color, confidence
 
@@ -163,6 +164,34 @@ def get_square_color(square_img, square_name):
 
     return 'dark' if is_dark else 'light'
 
+def detect_piece_color_debug(square_region,square_name):
+    gray = cv2.cvtColor(square_region, cv2.COLOR_BGR2GRAY)
+    hsv = cv2.cvtColor(square_region, cv2.COLOR_BGR2HSV)
+
+    avg_brightness = np.mean(gray)
+
+    avg_saturation = np.mean(hsv[:, :, 1])
+
+    b, g, r = cv2.split(square_region)
+    avg_r = np.mean(r)
+    avg_g = np.mean(g)
+    avg_b = np.mean(b)
+    square_back_color=get_square_color(square_region,square_name)
+    print("square_back_color : ",square_back_color)
+    print("Average saturation : ",avg_saturation)
+    print("Average red : ", avg_r, "Average blue : ", avg_b)
+    print("Average brightness : ", avg_brightness)
+    # TEMP LOGIC (we will tune this)
+    if avg_saturation > 80 and avg_r < avg_b:
+        result = "blue (gold)"
+    elif avg_saturation < 80 and avg_brightness > 50:
+        result = "white (silver)"
+    else:
+
+
+        result = "blue(gold)"
+
+    return result
 
 def detect_piece_color(square_region, square_color):
     """
@@ -201,11 +230,11 @@ def detect_piece_color(square_region, square_color):
     # - Low saturation
     # - Balanced RGB (not too much of any color)
     is_white = (
-            avg_brightness > 100 and  # Bright
-            avg_saturation < 90 and  # Desaturated
-            abs(avg_r - avg_g) < 25 and  # Balanced colors
-            abs(avg_g - avg_b) < 35 and
-            brightness_std > 15  # Some variation (not uniform)
+            avg_brightness > 50 and  # Bright
+            avg_saturation < 25 and  # Desaturated
+            abs(avg_r - avg_g) < 5 and  # Balanced colors
+            abs(avg_g - avg_b) < 5 #and
+            #brightness_std > 15  # Some variation (not uniform)
     )
 
     # Black piece characteristics:
@@ -213,10 +242,10 @@ def detect_piece_color(square_region, square_color):
     # - Higher saturation (dark but colorful)
     # - Often blue/red tint for dark pieces
     is_black = (
-            avg_brightness < 80 and  # Dark
-            avg_saturation >120 and  # Saturated
-            abs(avg_r - avg_g) > 10 and  # Balanced colors
-            abs(avg_g - avg_b) > 20
+            #avg_brightness < 80 and  # Dark
+            avg_saturation >35 and  # Saturated
+            #abs(avg_r - avg_g) > 10 and  # Balanced colors
+            abs(avg_g - avg_b) > 5
             #brightness_std > 20 #and  # More variation
             #(avg_saturation > 120 or  # Either saturated color
             # avg_value < 70)  # Or very dark
@@ -280,7 +309,7 @@ def draw_chessboard_grid(frame, full_corners, board_state=None):
                     center_y = int((y1 + y2) / 2)
 
                     # Draw circle for piece
-                    color = (255, 255, 255) if info['color'] == 'white' else (0, 0, 0)
+                    color = (255, 255, 255) if info['color'] == 'white (silver)' else (0, 0, 0)
                     thickness = -1 if info['color'] == 'white' else 2
                     cv2.circle(frame, (center_x, center_y), 15, color, thickness)
 
@@ -291,14 +320,14 @@ def draw_chessboard_grid(frame, full_corners, board_state=None):
 
     return frame
 
-
-def analyze_board_state(squares, squares_info):
+maximum= 0
+def analyze_board_state(squares, squares_info,max_cont):
     """Analyze all squares to detect pieces"""
     board_state = {}
 
     for square_name, square_img in squares.items():
         if square_name in squares_info and square_img is not None and square_img.size > 0:
-            has_piece, piece_color, confidence = detect_piece_in_square(square_img, square_name)
+            has_piece, piece_color, confidence = detect_piece_in_square(square_img, square_name,max_cont)
 
             board_state[square_name] = {
                 'has_piece': has_piece,
@@ -455,7 +484,7 @@ def main():
             # Analyze board state periodically
             current_time = time.time()
             if current_time - last_analysis_time > analysis_interval:
-                board_state = analyze_board_state(squares, squares_info)
+                board_state = analyze_board_state(squares, squares_info,4)
                 display_board_state(board_state)
                 last_analysis_time = current_time
 
