@@ -38,7 +38,8 @@ def extract_8x8_squares(frame, full_corners):
     """Extract individual chess squares from the board"""
     squares = {}
     squares_info = {}  # Store square coordinates for piece detection
-    files = "abcdefgh"
+    files = "hgfedcba"
+    #files = "abcdefgh"
     ranks = "87654321"  # top of image = rank 8
 
     for r in range(8):
@@ -58,7 +59,11 @@ def extract_8x8_squares(frame, full_corners):
 
             if y < y_end and x < x_end:
                 square = frame[y:y_end, x:x_end]
-                square_name = files[c] + ranks[r]
+                file_index = r
+                rank_index = 7 - c
+                #square_name = files[file_index] + ranks[rank_index]
+                square_name = files[r] + ranks[c]
+                #square_name = files[c] + ranks[r]
                 squares[square_name] = square
                 squares_info[square_name] = {
                     'coords': (x, y, x_end - x, y_end - y),
@@ -99,7 +104,7 @@ def detect_piece_in_square(square_img, square_name,max_cont):
 
     # Method 1: Check for piece by analyzing edges
     gray = cv2.cvtColor(square_img, cv2.COLOR_BGR2GRAY)
-    blur = cv2.GaussianBlur(gray,(5,5), 0 )
+    blur = cv2.GaussianBlur(gray,(9,9), 0 )
     # Apply edge detection
     edges = cv2.Canny(blur, 50, 150)
     #cv2.imshow(f"edges de {square_name}: ",edges)
@@ -108,6 +113,10 @@ def detect_piece_in_square(square_img, square_name,max_cont):
     edge_density = np.sum(edges > 0) / edges.size
     if square_name == "e4" :
         cv2.imshow("e4 edges : ", edges)
+    if square_name == "e5" :
+        cv2.imshow("e5 edges : ", edges)
+    if square_name == "a1" :
+        cv2.imshow("a1 edges : ", edges)
     # Method 2: Check for color contrast with square
     # Empty squares have more uniform color
     std_color = np.std(square_img, axis=(0, 1))
@@ -122,7 +131,8 @@ def detect_piece_in_square(square_img, square_name,max_cont):
     confidence = 0.0
 
     # Edge-based detection
-    if len(contours) > max_cont:  # Piece has more edges
+    #if len(contours) > max_cont+2:  # Piece has more edges
+    if edge_density>=max_cont+0.025 :
         has_piece = True
         confidence += 0.4
 
@@ -142,7 +152,7 @@ def detect_piece_in_square(square_img, square_name,max_cont):
         return False, None, 0.0
 
     # Determine piece color (white or black)
-    print("square_name : ", square_name)
+    #print("square_name : ", square_name)
     piece_color = detect_piece_color_debug(center_region,square_name)
     if piece_color == "unknown" :
         return False, None, 0.0
@@ -153,8 +163,9 @@ def detect_piece_in_square(square_img, square_name,max_cont):
 def get_square_color(square_img, square_name):
     """Determine if square is light or dark based on chessboard pattern"""
     # Chessboard pattern: a1 is dark, h8 is light
-    files = "abcdefgh"
-    ranks = "87654321"
+    files = "hgfedcba"
+    #files = "abcdefgh"
+    ranks = "12345678"
 
     file_idx = files.index(square_name[0])
     rank_idx = ranks.index(square_name[1])
@@ -162,35 +173,48 @@ def get_square_color(square_img, square_name):
     # Chessboard pattern formula: (file + rank) % 2 == 0 means dark
     is_dark = (file_idx + rank_idx) % 2 == 0
 
-    return 'dark' if is_dark else 'light'
+    return 'light' if is_dark else 'dark'
 
 def detect_piece_color_debug(square_region,square_name):
     gray = cv2.cvtColor(square_region, cv2.COLOR_BGR2GRAY)
     hsv = cv2.cvtColor(square_region, cv2.COLOR_BGR2HSV)
-
+    avg_saturation = np.mean(hsv[:, :, 1])
     avg_brightness = np.mean(gray)
 
-    avg_saturation = np.mean(hsv[:, :, 1])
 
     b, g, r = cv2.split(square_region)
     avg_r = np.mean(r)
     avg_g = np.mean(g)
     avg_b = np.mean(b)
     square_back_color=get_square_color(square_region,square_name)
-    print("square_back_color : ",square_back_color)
-    print("Average saturation : ",avg_saturation)
-    print("Average red : ", avg_r, "Average blue : ", avg_b)
-    print("Average brightness : ", avg_brightness)
+
+    #print("square_back_color : ",square_back_color)
+    #print("Average saturation : ",avg_saturation)
+    #print("Average red : ", avg_r, "Average blue : ", avg_b, "Average green : ", avg_g)
+    #print("Average brightness : ", avg_brightness)
+
+
+
     # TEMP LOGIC (we will tune this)
-    if avg_saturation > 80 and avg_r < avg_b:
+    """
+    if (avg_saturation <= bl+5 and square_back_color=="light" ) or (avg_saturation<=bb+5 and square_back_color=="dark" ):
         result = "blue (gold)"
-    elif avg_saturation < 80 and avg_brightness > 50:
+    elif (avg_saturation >= wl-5 and square_back_color=="light" ) or (avg_saturation>=wb-5 and square_back_color=="dark"  ) :
         result = "white (silver)"
     else:
-
-
-        result = "blue(gold)"
-
+        if square_back_color=="light" :
+            if abs(avg_saturation-bl)> abs(avg_brightness - wl) :
+                result = "blue (gold)"
+            else : result = "white (silver)"
+        else :
+            if abs(avg_saturation-bb)> abs(avg_brightness - wb) :
+                result = "blue (gold)"
+            else : result = "white (silver)"
+    """
+    if avg_g-avg_b > -4:
+        result = "blue (gold)"
+    else :
+        result = "white (silver)"
     return result
 
 def detect_piece_color(square_region, square_color):
@@ -294,16 +318,39 @@ def draw_chessboard_grid(frame, full_corners, board_state=None):
     if board_state:
         for square_name, info in board_state.items():
             if info['has_piece']:
+                #print("square name in drawing : ",square_name)
                 # Get square center from corners (simplified)
                 file_idx = ord(square_name[0]) - ord('a')
                 rank_idx = 8 - int(square_name[1])  # Convert rank to 0-7
-
+                #print("square_name : ",square_name)
                 if 0 <= file_idx < 8 and 0 <= rank_idx < 8:
                     # Calculate center between four corners
+                    """
                     x1 = full_corners[rank_idx, file_idx, 0]
                     y1 = full_corners[rank_idx, file_idx, 1]
                     x2 = full_corners[rank_idx + 1, file_idx + 1, 0]
                     y2 = full_corners[rank_idx + 1, file_idx + 1, 1]
+                    """
+                    #rotate 180°
+                    rotated_rank1 = 7 - rank_idx
+                    rotated_file1 = 7 - file_idx
+                    #rotate 90 counter clockwise
+                    rotated_rank = rotated_file1
+                    rotated_file = 7 - rotated_rank1
+                    x1 = full_corners[rotated_rank, rotated_file, 0]
+                    y1 = full_corners[rotated_rank, rotated_file, 1]
+                    x2 = full_corners[rotated_rank + 1, rotated_file + 1, 0]
+                    y2 = full_corners[rotated_rank + 1, rotated_file + 1, 1]
+
+                    """
+                    #mirror (reflexive)
+                    reversed_file = 7 - file_idx
+                    # Use swapped indices with reversed file
+                    x1 = full_corners[reversed_file, rank_idx, 0]
+                    y1 = full_corners[reversed_file, rank_idx, 1]
+                    x2 = full_corners[reversed_file + 1, rank_idx + 1, 0]
+                    y2 = full_corners[reversed_file + 1, rank_idx + 1, 1]
+                    """
 
                     center_x = int((x1 + x2) / 2)
                     center_y = int((y1 + y2) / 2)
@@ -320,14 +367,14 @@ def draw_chessboard_grid(frame, full_corners, board_state=None):
 
     return frame
 
-maximum= 0
+
 def analyze_board_state(squares, squares_info,max_cont):
     """Analyze all squares to detect pieces"""
     board_state = {}
 
     for square_name, square_img in squares.items():
         if square_name in squares_info and square_img is not None and square_img.size > 0:
-            has_piece, piece_color, confidence = detect_piece_in_square(square_img, square_name,max_cont)
+            has_piece, piece_color, confidence = detect_piece_in_square(square_img, square_name,max_cont[square_name])
 
             board_state[square_name] = {
                 'has_piece': has_piece,
@@ -352,8 +399,9 @@ def display_board_state(board_state):
     print("CHESSBOARD STATE ANALYSIS")
     print("=" * 50)
 
-    files = "abcdefgh"
-    ranks = "87654321"
+    #files = "abcdefgh"
+    files = "hgfedcba"
+    ranks = "12345678"
 
     # Create board representation
     board_grid = [["  " for _ in range(8)] for _ in range(8)]
@@ -445,7 +493,7 @@ def main():
         display_frame = frame.copy()
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         cv2.imshow("gray : ", gray)
-        cv2.imshow("edged", cv2.Canny(cv2.GaussianBlur(gray,(5,5), 0), 50, 150))
+        cv2.imshow("edged", cv2.Canny(cv2.GaussianBlur(gray,(9,9), 0), 50, 150))
         # Find chessboard corners
         found, corners = cv2.findChessboardCorners(
             gray,
@@ -484,7 +532,7 @@ def main():
             # Analyze board state periodically
             current_time = time.time()
             if current_time - last_analysis_time > analysis_interval:
-                board_state = analyze_board_state(squares, squares_info,4)
+                board_state = analyze_board_state(squares, squares_info,4,50,80,40,80)
                 display_board_state(board_state)
                 last_analysis_time = current_time
 
