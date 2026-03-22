@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chess Vision</title>
+<script src="/static/socket.io.min.js"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --sq-light:    #f0d9b5;
+  --sq-dark:     #b58863;
+  --last-move:   rgba(255, 220, 50, 0.40);
+  --legal-dot:   rgba(20, 85, 30, 0.45);
+  --legal-dot:   rgba(20, 85, 30, 0.45);
+  --selected:    rgba(20, 85, 30, 0.55);
+  --suggestion:  rgba(100, 180, 255, 0.55);
+  --bg:          #1a1816;
+  --panel:       #2c2926;
+  --surface:     #1e1c1a;
+  --card:        #3a3532;
+  --text:        #e8e0d4;
+  --muted:       #9c9082;
+  --gold:        #c8a951;
+  --silver:      #b0b8c0;
+  --white-piece: #f5f0e8;
+  --black-piece: #2a2520;
+  --move-row:    #3d3a36;
+  --move-hover:  #4a4742;
+}
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  color: var(--text);
+}
+
+.app {
+  display: flex;
+  gap: 10px;
+  padding: 14px;
+  background: var(--panel);
+  border-radius: 14px;
+  align-items: flex-start;
+  box-shadow: 0 8px 48px rgba(0,0,0,0.7);
+}
+
+/* ── LEFT PANEL ── */
+.left {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 176px;
+  flex-shrink: 0;
+}
+
+.player-card {
+  background: var(--card);
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(255,255,255,0.07);
+  transition: border-color .3s, box-shadow .3s;
+}
+.player-card.active {
+  border-color: var(--gold);
+  box-shadow: 0 0 0 1px rgba(200,169,81,0.18);
+}
+.avatar {
+  width: 34px; height: 34px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 600; flex-shrink: 0;
+}
+.avatar.silver { background: rgba(176,184,192,.15); color: var(--silver); border: 1.5px solid var(--silver); }
+.avatar.gold   { background: rgba(200,169,81,.15);  color: var(--gold);   border: 1.5px solid var(--gold); }
+.pname  { font-size: 12px; font-weight: 600; }
+.plabel { font-size: 10px; color: var(--muted); margin-top: 1px; }
+.dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--gold);
+  margin-left: auto;
+  animation: pulse 1.4s ease-in-out infinite;
+  flex-shrink: 0;
+}
+.dot.off { visibility: hidden; }
+@keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.4;transform:scale(.72)} }
+
+.cap-box {
+  background: var(--surface);
+  border-radius: 8px;
+  padding: 7px 10px;
+}
+.cap-label { font-size: 9px; letter-spacing:.08em; color: var(--muted); text-transform:uppercase; margin-bottom:4px; }
+.cap-row   { display:flex; flex-wrap:wrap; gap:2px; min-height:20px; }
+.cp        { font-size:16px; line-height:1; }
+
+.status-box {
+  background: var(--card);
+  border-radius: 8px;
+  padding: 9px 10px;
+  text-align: center;
+  border: 1px solid rgba(255,255,255,0.07);
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+/* ── BOARD AREA ── */
+.board-area {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  flex-shrink: 0;
+}
+
+.eval-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+.eval-bar {
+  width: 11px;
+  height: 368px;
+  background: #d8cfc4;
+  border-radius: 6px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.eval-black {
+  width: 100%;
+  background: #2a2520;
+  transition: height .45s ease;
+}
+.eval-num { font-size: 9px; color: var(--muted); }
+
+.board-wrap { display: flex; flex-direction: column; }
+
+#board {
+  display: grid;
+  grid-template-columns: repeat(8, 46px);
+  grid-template-rows: repeat(8, 46px);
+  border: 3px solid #8a6240;
+  border-radius: 2px;
+  overflow: hidden;
+  box-shadow: 0 4px 28px rgba(0,0,0,0.55);
+}
+
+.sq {
+  width: 46px; height: 46px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; position: relative; user-select: none;
+}
+.sq.light { background: var(--sq-light); }
+.sq.dark  { background: var(--sq-dark); }
+.sq.last-from { box-shadow: inset 0 0 0 46px var(--last-move); }
+.sq.last-to   { box-shadow: inset 0 0 0 46px var(--last-move); }
+.sq.selected  { box-shadow: inset 0 0 0 46px var(--selected); }
+.sq.suggest   { box-shadow: inset 0 0 0 46px var(--suggestion); }
+.sq:hover { filter: brightness(1.07); }
+
+.sq.legal-dot::after {
+  content: ''; position: absolute;
+  width: 15px; height: 15px; border-radius: 50%;
+  background: var(--legal-dot); pointer-events: none;
+}
+.sq.legal-cap::after {
+  content: ''; position: absolute; inset: 0;
+  box-shadow: inset 0 0 0 4px var(--legal-dot); pointer-events: none;
+}
+
+.piece {
+  font-size: 32px; line-height: 1;
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,.45));
+  user-select: none; position: relative; z-index: 1;
+  transition: transform .1s;
+  pointer-events: none;
+}
+
+/* coord labels */
+.rank-col { display:flex; flex-direction:column; width:18px; justify-content:space-around; align-items:center; height:368px; }
+.file-row { display:flex; padding-left:18px; }
+.coord { font-size: 9px; color: var(--muted); }
+.file-cell { width:46px; text-align:center; font-size:9px; color:var(--muted); }
+
+/* ── RIGHT PANEL ── */
+.right {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 156px;
+  flex-shrink: 0;
+}
+
+.move-list-box {
+  background: var(--surface);
+  border-radius: 8px;
+  padding: 8px 10px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.move-list-box::-webkit-scrollbar { width: 4px; }
+.move-list-box::-webkit-scrollbar-thumb { background: var(--card); border-radius: 2px; }
+.sec-label { font-size: 9px; letter-spacing:.08em; color: var(--muted); text-transform:uppercase; margin-bottom:5px; }
+
+.mrow {
+  display: grid;
+  grid-template-columns: 22px 1fr 1fr;
+  gap: 2px; padding: 3px 3px;
+  border-radius: 4px; font-size: 11px;
+  font-family: 'Courier New', monospace;
+}
+.mrow:hover { background: var(--move-hover); }
+.mrow.latest { background: var(--move-row); }
+.mnum  { color: var(--muted); font-size: 10px; display:flex; align-items:center; }
+.mcell { padding: 2px 4px; border-radius: 3px; color: var(--text); }
+.mcell.hi { background: var(--gold); color: #1a1510; font-weight: 600; }
+
+.engine-box { background: var(--surface); border-radius: 8px; padding: 8px 10px; }
+.erow { display:flex; justify-content:space-between; align-items:center; margin-top:4px; }
+.eval { font-size: 11px; font-weight: 600; }
+.elbl { font-size: 10px; color: var(--muted); }
+
+.keys-box { background: var(--card); border-radius: 8px; padding: 8px 10px; }
+.key-row { display:flex; align-items:center; gap:7px; padding:3px 0; font-size:11px; color:var(--muted); }
+kbd {
+  background: var(--surface); border: 1px solid rgba(255,255,255,.15);
+  border-radius: 4px; padding: 1px 6px; font-size: 11px;
+  color: var(--gold); font-family: monospace;
+}
+
+/* connection badge */
+.conn {
+  position: fixed; top: 10px; right: 12px;
+  background: var(--card); border-radius: 6px;
+  padding: 4px 10px; font-size: 10px;
+  display: flex; align-items: center; gap: 5px;
+  border: 1px solid rgba(255,255,255,.08); color: var(--muted);
+}
+.conn-dot { width:6px; height:6px; border-radius:50%; background:#e25; flex-shrink:0; }
+.conn-dot.on { background:#4c8; animation: pulse 2s ease-in-out infinite; }
+
+@keyframes flash { 0%{filter:brightness(1.7)} 100%{filter:brightness(1)} }
+.flash { animation: flash .35s ease-out; }
+</style>
+</head>
+<body>
+
+<div class="conn">
+  <div class="conn-dot" id="cdot"></div>
+  <span id="ctxt">Connecting…</span>
+</div>
+
+<div class="app">
+
+  <!-- LEFT -->
+  <div class="left">
+    <div class="player-card" id="card-gold">
+      <div class="avatar gold">SF</div>
+      <div>
+        <div class="pname">Stockfish</div>
+        <div class="plabel">Gold · Engine</div>
+      </div>
+      <div class="dot off" id="dot-gold"></div>
+    </div>
+
+    <div class="cap-box">
+      <div class="cap-label">Captured by Gold</div>
+      <div class="cap-row" id="cap-gold"></div>
+    </div>
+
+    <div style="flex:1;min-height:16px"></div>
+
+    <div class="cap-box">
+      <div class="cap-label">Captured by Silver</div>
+      <div class="cap-row" id="cap-silver"></div>
+    </div>
+
+    <div class="player-card active" id="card-silver">
+      <div class="avatar silver">YO</div>
+      <div>
+        <div class="pname">You</div>
+        <div class="plabel">Silver · Human</div>
+      </div>
+      <div class="dot" id="dot-silver"></div>
+    </div>
+
+    <div class="status-box" id="status">Waiting for Python…</div>
+  </div>
+
+  <!-- BOARD -->
+  <div class="board-area">
+    <div class="eval-col">
+      <div class="eval-bar">
+        <div class="eval-black" id="eval-black" style="height:50%"></div>
+      </div>
+      <div class="eval-num" id="eval-num">0.0</div>
+    </div>
+
+    <div class="board-wrap">
+      <div style="display:flex">
+        <div class="rank-col" id="rank-col"></div>
+        <div id="board"></div>
+      </div>
+      <div class="file-row" id="file-row"></div>
+    </div>
+  </div>
+
+  <!-- RIGHT -->
+  <div class="right">
+    <div class="move-list-box" id="move-box">
+      <div class="sec-label">Move history</div>
+      <div id="move-list"></div>
+    </div>
+
+    <div class="engine-box">
+      <div class="sec-label">Stockfish</div>
+      <div class="erow">
+        <span class="elbl">Last move</span>
+        <span class="eval" id="sf-last">—</span>
+      </div>
+      <div class="erow">
+        <span class="elbl">Move count</span>
+        <span class="eval" id="sf-count">0</span>
+      </div>
+    </div>
+
+    <div class="keys-box">
+      <div class="sec-label">Keys</div>
+      <div class="key-row"><kbd>b</kbd> lock board</div>
+      <div class="key-row"><kbd>s</kbd> start game</div>
+      <div class="key-row"><kbd>m</kbd> confirm move</div>
+      <div class="key-row"><kbd>g</kbd> restart game</div>
+      <div class="key-row"><kbd>r</kbd> full reset</div>
+      <div class="key-row"><kbd>q</kbd> quit</div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const FILES = 'abcdefgh';
+const GLYPHS = {
+  K:'♔', Q:'♕', R:'♖', B:'♗', N:'♘', P:'♙',
+  k:'♚', q:'♛', r:'♜', b:'♝', n:'♞', p:'♟'
+};
+const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR';
+
+let pieces      = {};
+let history     = [];
+let capSilver   = [];
+let capGold     = [];
+let lastFrom    = null;
+let lastTo      = null;
+let selectedSq  = null;
+let sfCount     = 0;
+let suggestFrom = null;
+let suggestTo   = null;
+
+// ── SOCKET ──
+const socket = io({ transports: ['polling', 'websocket'] });
+
+socket.on('connect', () => {
+  document.getElementById('cdot').classList.add('on');
+  document.getElementById('ctxt').textContent = 'Connected';
+  socket.emit('client_ready', {});
+});
+socket.on('disconnect', () => {
+  document.getElementById('cdot').classList.remove('on');
+  document.getElementById('ctxt').textContent = 'Disconnected';
+});
+socket.on('connect', () => {
+  console.log('✅ connected', socket.id);
+  socket.emit('client_ready', {});  // ADD THIS LINE
+});
+socket.on('client_ready', () => {
+  console.log('✅ Client Ready');
+});
+
+// ADD THIS
+socket.on('apply_move', () => console.log('📥 apply_move received:', d));
+socket.on('status', () => console.log('📥 status received:', d));
+socket.on('eval', () => console.log('📥 eval received:', d));
+socket.on('reset_game', () => console.log('📥 reset_game received'));
+socket.on('apply_move',    d => applyMove(d.from, d.to, d.player || 'silver'));
+socket.on('apply_move',    d => console.log());
+socket.on('status',        d => setStatus(d.msg));
+socket.on('eval',          d => updateEval(d.score));
+socket.on('reset_game',    () => initBoard());
+socket.on('sf_suggestion', d => {
+  suggestFrom = d.from;
+  suggestTo   = d.to;
+  renderBoard();
+  setTimeout(() => { suggestFrom = null; suggestTo = null; renderBoard(); }, 10000);
+});
+
+// ── INIT ──
+function fenToBoard(fen) {
+  const b = {};
+  fen.split('/').forEach((row, ri) => {
+    const rank = 8 - ri;
+    let fi = 0;
+    for (const ch of row) {
+      if (isNaN(ch)) { b[FILES[fi] + rank] = ch; fi++; }
+      else fi += +ch;
+    }
+  });
+  return b;
+}
+
+function initBoard() {
+  pieces    = fenToBoard(START_FEN);
+  history   = [];
+  capSilver = [];
+  capGold   = [];
+  lastFrom  = lastTo = selectedSq = suggestFrom = suggestTo = null;
+  sfCount   = 0;
+  document.getElementById('sf-last').textContent  = '—';
+  document.getElementById('sf-count').textContent = '0';
+  updateEval(0);
+  setTurn('silver');
+  renderAll();
+}
+
+// ── APPLY MOVE ──
+function applyMove(from, to, player) {
+  const piece    = pieces[from];
+  if (!piece) return;
+  const captured = pieces[to];
+
+  pieces[to] = piece;
+  delete pieces[from];
+
+  // pawn promotion → queen
+  if (piece.toLowerCase() === 'p' && (to[1] === '8' || to[1] === '1'))
+    pieces[to] = piece === 'P' ? 'Q' : 'q';
+
+  if (captured) {
+    const sym = GLYPHS[captured] || captured;
+    if (player === 'silver') capSilver.push(sym);
+    else                     capGold.push(sym);
+  }
+
+  const note = toNote(piece, from, to, captured);
+  if (player === 'silver') {
+    history.push({ num: Math.floor(history.length / 2) + 1, white: note, black: null });
+  } else {
+    if (history.length > 0) history[history.length - 1].black = note;
+    sfCount++;
+    document.getElementById('sf-last').textContent  = note;
+    document.getElementById('sf-count').textContent = sfCount;
+  }
+
+  lastFrom = from; lastTo = to;
+  suggestFrom = null; suggestTo = null;
+
+  setTurn(player === 'silver' ? 'gold' : 'silver');
+  renderAll();
+  flashSq(from); flashSq(to);
+}
+
+function toNote(piece, from, to, captured) {
+  const p = piece.toLowerCase();
+  if (p === 'p') return (captured ? from[0] + 'x' : '') + to;
+  return piece.toUpperCase() + (captured ? 'x' : '') + to;
+}
+
+// ── RENDER BOARD ──
+function renderBoard() {
+  const boardEl = document.getElementById('board');
+  boardEl.innerHTML = '';
+
+  // rank labels
+  const rankCol = document.getElementById('rank-col');
+  rankCol.innerHTML = '';
+  for (let r = 8; r >= 1; r--) {
+    const el = document.createElement('span');
+    el.className = 'coord';
+    el.textContent = r;
+    rankCol.appendChild(el);
+  }
+
+  // file labels
+  const fileRow = document.getElementById('file-row');
+  fileRow.innerHTML = '';
+  for (const f of FILES) {
+    const el = document.createElement('div');
+    el.className = 'file-cell';
+    el.textContent = f;
+    fileRow.appendChild(el);
+  }
+
+  for (let rank = 8; rank >= 1; rank--) {
+    for (let fi = 0; fi < 8; fi++) {
+      const sq      = FILES[fi] + rank;
+      const isLight = (fi + rank) % 2 === 1;
+      const div     = document.createElement('div');
+      div.className = 'sq ' + (isLight ? 'light' : 'dark');
+      div.dataset.sq = sq;
+
+      if (sq === lastFrom)   div.classList.add('last-from');
+      if (sq === lastTo)     div.classList.add('last-to');
+      if (sq === selectedSq) div.classList.add('selected');
+      if (sq === suggestFrom || sq === suggestTo) div.classList.add('suggest');
+
+      div.addEventListener('click', () => onSqClick(sq));
+
+      if (pieces[sq]) {
+        const span = document.createElement('span');
+        span.className = 'piece';
+        span.textContent = GLYPHS[pieces[sq]] || pieces[sq];
+        const isW = pieces[sq] === pieces[sq].toUpperCase();
+        span.style.color = isW ? 'var(--white-piece)' : 'var(--black-piece)';
+        if (!isW) span.style.filter =
+          'drop-shadow(0 0 1.5px rgba(200,169,81,.55)) drop-shadow(0 1px 2px rgba(0,0,0,.6))';
+        div.appendChild(span);
+      }
+      boardEl.appendChild(div);
+    }
+  }
+}
+
+// ── CLICK (visual only) ──
+function onSqClick(sq) {
+  if (selectedSq === sq) { selectedSq = null; clearLegal(); renderBoard(); return; }
+  const piece = pieces[sq];
+  if (piece) { selectedSq = sq; renderBoard(); showLegal(sq); }
+  else { selectedSq = null; clearLegal(); renderBoard(); }
+}
+
+function showLegal(from) {
+  const piece = pieces[from];
+  document.querySelectorAll('.sq').forEach(el => {
+    const sq = el.dataset.sq;
+    if (sq === from || !canReach(piece, from, sq)) return;
+    const t = pieces[sq];
+    const isEnemy = t && (piece === piece.toUpperCase() ? t === t.toLowerCase() : t === t.toUpperCase());
+    if (isEnemy) el.classList.add('legal-cap');
+    else if (!t) el.classList.add('legal-dot');
+  });
+}
+
+function clearLegal() {
+  document.querySelectorAll('.sq').forEach(el => el.classList.remove('legal-dot', 'legal-cap'));
+}
+
+function canReach(piece, from, to) {
+  const fc = FILES.indexOf(from[0]), fr = +from[1];
+  const tc = FILES.indexOf(to[0]),   tr = +to[1];
+  const dc = tc-fc, dr = tr-fr, adc = Math.abs(dc), adr = Math.abs(dr);
+  const p = piece.toLowerCase();
+  if (p==='p'){const d=piece===piece.toUpperCase()?1:-1;return(dc===0&&dr===d&&!pieces[to])||(dc===0&&dr===2*d&&!pieces[to]&&fr===(d===1?2:7))||(adc===1&&dr===d&&!!pieces[to]);}
+  if (p==='n') return (adc===1&&adr===2)||(adc===2&&adr===1);
+  if (p==='b') return adc===adr&&adc>0;
+  if (p==='r') return (dc===0||dr===0)&&(adc+adr)>0;
+  if (p==='q') return (adc===adr&&adc>0)||((dc===0||dr===0)&&(adc+adr)>0);
+  if (p==='k') return adc<=1&&adr<=1&&(adc+adr)>0;
+  return false;
+}
+
+// ── HISTORY ──
+function renderHistory() {
+  const list = document.getElementById('move-list');
+  list.innerHTML = '';
+  history.forEach((mv, i) => {
+    const isLast = i === history.length - 1;
+    const row = document.createElement('div');
+    row.className = 'mrow' + (isLast ? ' latest' : '');
+    row.innerHTML =
+      `<span class="mnum">${mv.num}.</span>` +
+      `<span class="mcell${isLast && !mv.black ? ' hi' : ''}">${mv.white || ''}</span>` +
+      `<span class="mcell${isLast &&  mv.black ? ' hi' : ''}">${mv.black  || ''}</span>`;
+    list.appendChild(row);
+  });
+  const box = document.getElementById('move-box');
+  box.scrollTop = box.scrollHeight;
+}
+
+function renderCaptured() {
+  document.getElementById('cap-gold').innerHTML   = capGold.map(p=>`<span class="cp">${p}</span>`).join('');
+  document.getElementById('cap-silver').innerHTML = capSilver.map(p=>`<span class="cp">${p}</span>`).join('');
+}
+
+function setTurn(who) {
+  const isSilver = who === 'silver';
+  document.getElementById('card-silver').classList.toggle('active',  isSilver);
+  document.getElementById('card-gold').classList.toggle('active',   !isSilver);
+  document.getElementById('dot-silver').classList.toggle('off',     !isSilver);
+  document.getElementById('dot-gold').classList.toggle('off',        isSilver);
+}
+
+function updateEval(score) {
+  const pct     = Math.round(50 - (score / 10) * 50);
+  const clamped = Math.max(5, Math.min(95, pct));
+  document.getElementById('eval-black').style.height = clamped + '%';
+  document.getElementById('eval-num').textContent    = (score >= 0 ? '+' : '') + score.toFixed(1);
+}
+
+function setStatus(msg) {
+  document.getElementById('status').innerHTML = msg;
+}
+
+function flashSq(sq) {
+  const el = document.querySelector(`[data-sq="${sq}"]`);
+  if (!el) return;
+  el.classList.add('flash');
+  setTimeout(() => el.classList.remove('flash'), 350);
+}
+
+function renderAll() {
+  renderBoard();
+  renderHistory();
+  renderCaptured();
+}
+
+initBoard();
+</script>
+</body>
+</html>

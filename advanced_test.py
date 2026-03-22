@@ -100,10 +100,10 @@ def detect_piece_in_square(square_img, square_name,max_cont):
     avg_hsv = np.mean(hsv, axis=(0, 1))
 
     # Get square color (light or dark)
-    square_color = get_square_color(square_img, square_name)
+    square_color = get_square_color(center_region, square_name)
 
     # Method 1: Check for piece by analyzing edges
-    gray = cv2.cvtColor(square_img, cv2.COLOR_BGR2GRAY)
+    gray = cv2.cvtColor(center_region, cv2.COLOR_BGR2GRAY)
     blur = cv2.GaussianBlur(gray,(9,9), 0 )
     # Apply edge detection
     edges = cv2.Canny(blur, 50, 150)
@@ -150,11 +150,13 @@ def detect_piece_in_square(square_img, square_name,max_cont):
 
     if not has_piece:
         return False, None, 0.0
+    cv2.imshow("square_reg_edges", edges)
 
     # Determine piece color (white or black)
     #print("square_name : ", square_name)
     piece_color = detect_piece_color_debug(center_region,square_name)
     if piece_color == "unknown" :
+
         return False, None, 0.0
 
     return True, piece_color, confidence
@@ -175,47 +177,32 @@ def get_square_color(square_img, square_name):
 
     return 'light' if is_dark else 'dark'
 
-def detect_piece_color_debug(square_region,square_name):
-    gray = cv2.cvtColor(square_region, cv2.COLOR_BGR2GRAY)
-    hsv = cv2.cvtColor(square_region, cv2.COLOR_BGR2HSV)
-    avg_saturation = np.mean(hsv[:, :, 1])
-    avg_brightness = np.mean(gray)
+def detect_piece_color_debug(square_region, square_name):
 
+    h, w = square_region.shape[:2]
+    # Focus on center region (avoid edges)
+    margin = int(min(h, w) * 0.2)
+    square_region = square_region[margin:h - margin, margin:w - margin]
+    # Convert to LAB
+    lab = cv2.cvtColor(square_region, cv2.COLOR_BGR2LAB)
+    L, A, B = cv2.split(lab)
 
-    b, g, r = cv2.split(square_region)
-    avg_r = np.mean(r)
-    avg_g = np.mean(g)
-    avg_b = np.mean(b)
-    square_back_color=get_square_color(square_region,square_name)
+    # Filter out too dark and too bright pixels (remove shadows and reflections)
+    mask = (L > 60) & (L < 245)
 
-    #print("square_back_color : ",square_back_color)
-    #print("Average saturation : ",avg_saturation)
-    #print("Average red : ", avg_r, "Average blue : ", avg_b, "Average green : ", avg_g)
-    #print("Average brightness : ", avg_brightness)
+    if int(np.sum(mask)) < 30:
+        return "white (silver)"  # not enough valid pixels, default to silver
 
+    # Use 70th and 50th percentile of B channel (robust to highlights)
+    b_val = B[mask].astype(np.float32)
+    b_p70 = float(np.percentile(b_val, 70))
+    b_p50 = float(np.percentile(b_val, 50))
 
-
-    # TEMP LOGIC (we will tune this)
-    """
-    if (avg_saturation <= bl+5 and square_back_color=="light" ) or (avg_saturation<=bb+5 and square_back_color=="dark" ):
-        result = "blue (gold)"
-    elif (avg_saturation >= wl-5 and square_back_color=="light" ) or (avg_saturation>=wb-5 and square_back_color=="dark"  ) :
-        result = "white (silver)"
+    # Fixed thresholds (no hysteresis since no previous state here)
+    if b_p70 > 153 and b_p50 > 148:
+        return "blue (gold)"
     else:
-        if square_back_color=="light" :
-            if abs(avg_saturation-bl)> abs(avg_brightness - wl) :
-                result = "blue (gold)"
-            else : result = "white (silver)"
-        else :
-            if abs(avg_saturation-bb)> abs(avg_brightness - wb) :
-                result = "blue (gold)"
-            else : result = "white (silver)"
-    """
-    if avg_g-avg_b > -4:
-        result = "blue (gold)"
-    else :
-        result = "white (silver)"
-    return result
+        return "white (silver)"
 
 def detect_piece_color(square_region, square_color):
     """
@@ -395,9 +382,9 @@ def analyze_board_state(squares, squares_info,max_cont):
 
 def display_board_state(board_state):
     """Display board state in console"""
-    print("\n" + "=" * 50)
-    print("CHESSBOARD STATE ANALYSIS")
-    print("=" * 50)
+    #print("\n" + "=" * 50)
+    #print("CHESSBOARD STATE ANALYSIS")
+    #print("=" * 50)
 
     #files = "abcdefgh"
     files = "hgfedcba"
@@ -418,13 +405,13 @@ def display_board_state(board_state):
             board_grid[rank_idx][file_idx] = "--"
 
     # Print board
-    print("  " + " ".join(files.upper()))
-    for i in range(8):
-        print(f"{8 - i} ", end="")
-        for j in range(8):
-            print(board_grid[i][j], end=" ")
-        print(f" {8 - i}")
-    print("  " + " ".join(files.upper()))
+    #print("  " + " ".join(files.upper()))
+    #for i in range(8):
+        #print(f"{8 - i} ", end="")
+        #for j in range(8):
+            #print(board_grid[i][j], end=" ")
+        #print(f" {8 - i}")
+    #print("  " + " ".join(files.upper()))
 
     # Print statistics
     white_pieces = sum(1 for info in board_state.values()
@@ -432,11 +419,11 @@ def display_board_state(board_state):
     black_pieces = sum(1 for info in board_state.values()
                        if info['has_piece'] and info['color'] == 'black')
 
-    print(f"\n📊 Statistics:")
-    print(f"White pieces detected: {white_pieces}")
-    print(f"Black pieces detected: {black_pieces}")
-    print(f"Total pieces: {white_pieces + black_pieces}")
-    print("=" * 50)
+    #print(f"\n📊 Statistics:")
+    #print(f"White pieces detected: {white_pieces}")
+    #print(f"Black pieces detected: {black_pieces}")
+    #print(f"Total pieces: {white_pieces + black_pieces}")
+    #print("=" * 50)
 
 
 # =========================

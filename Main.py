@@ -1,3 +1,4 @@
+
 import cv2
 import numpy as np
 import time
@@ -9,9 +10,27 @@ from advanced_test import (analyze_board_state, display_board_state,
                            extract_8x8_squares, extrapolate_corners,
                            draw_chessboard_grid, get_square_color)
 
+# ── UI bridge ──
+try:
+    import chess_server as ui
+    UI_AVAILABLE = True
+except ImportError:
+    UI_AVAILABLE = False
+    class ui:
+        @staticmethod
+        def push_move(*a, **kw): pass
+        @staticmethod
+        def push_status(*a, **kw): pass
+        @staticmethod
+        def push_eval(*a, **kw): pass
+        @staticmethod
+        def push_reset(*a, **kw): pass
+        @staticmethod
+        def push_sf_suggestion(*a, **kw): pass
+
 # Stockfish engine setup
 engine = None
-board = None  # python-chess board (tracks the real game)
+board = None
 
 
 # ──────────────────────────────────────────────
@@ -44,36 +63,26 @@ def test_stockfish_directly(engine_path):
 
 def init_engine(engine_path=r"C:\stockfish\stockfish\stockfish-windows-x86-64-avx2.exe"):
     global engine, board
-
     try:
-        # Configure le transport pour éviter le crash sur Windows
         import chess.engine
-        chess.engine.SimpleEngine.DEFAULT_TIMEOUT = 30  # timeout plus long
-
-        engine = chess.engine.SimpleEngine.popen_uci(
-            engine_path,
-            setpgrp=False  # important sur Windows
-        )
-        engine.configure({"Threads": 1, "Hash": 16})  # config légère
+        chess.engine.SimpleEngine.DEFAULT_TIMEOUT = 30
+        engine = chess.engine.SimpleEngine.popen_uci(engine_path, setpgrp=False)
+        engine.configure({"Threads": 1, "Hash": 16})
         board = chess.Board()
         print("✅ Stockfish engine initialized")
-
         result = engine.play(board, chess.engine.Limit(time=0.5))
         print(f"✅ Test move: {result.move}")
         return True
-
     except Exception as e:
         print(f"❌ Failed to initialize Stockfish: {e}")
         return False
+
+
 # ──────────────────────────────────────────────
-# 2. GET BEST MOVE (uses python-chess board directly)
+# 2. STOCKFISH FUNCTIONS
 # ──────────────────────────────────────────────
 
 def get_best_move(time_limit=2.0):
-    """
-    Ask Stockfish for the best move on the current board state.
-    Returns UCI string (e.g. 'e2e4') or None.
-    """
     global engine, board
     if engine is None or board is None:
         print("❌ Engine not initialized")
@@ -86,12 +95,21 @@ def get_best_move(time_limit=2.0):
         return None
 
 
+def get_eval_score():
+    global engine, board
+    if engine is None or board is None:
+        return 0.0
+    try:
+        info = engine.analyse(board, chess.engine.Limit(depth=10))
+        score = info['score'].white()
+        if score.is_mate():
+            return 99.0 if score.mate() > 0 else -99.0
+        return score.score(mate_score=10000) / 100.0
+    except Exception:
+        return 0.0
+
+
 def apply_stockfish_move(move):
-    """
-    Apply Stockfish's move to the python-chess board.
-    move: chess.Move object
-    Returns UCI string for display (e.g. 'e2e4')
-    """
     global board
     if move and move in board.legal_moves:
         board.push(move)
@@ -102,11 +120,6 @@ def apply_stockfish_move(move):
 
 
 def apply_human_move(uci_string):
-    """
-    Apply the human's move to the python-chess board.
-    uci_string: e.g. 'e2e4'
-    Returns True if valid, False if illegal.
-    """
     global board
     try:
         move = chess.Move.from_uci(uci_string)
@@ -123,14 +136,10 @@ def apply_human_move(uci_string):
 
 
 # ──────────────────────────────────────────────
-# 3. MOVE DETECTION (fixed null-safety)
+# 3. MOVE DETECTION
 # ──────────────────────────────────────────────
 
 def detect_move(previous_state, current_state):
-    """
-    Detect chess moves by comparing two board states.
-    Returns (from_square, to_square, piece_color, captured_color, is_valid)
-    """
     if not previous_state or not current_state:
         return None, None, None, None, False
 
@@ -152,12 +161,10 @@ def detect_move(previous_state, current_state):
             elif not previous_state[sq]['has_piece'] and current_state[sq]['has_piece']:
                 to_square = sq
 
-        # Handle capture (color changed on same square)
         if from_square and to_square:
             piece_color = current_state[to_square]['color']
             return from_square, to_square, piece_color, None, True
 
-        # Piece eaten: both squares had pieces but colors swapped
         if from_square is None and to_square is None:
             for sq in changed_squares:
                 if previous_state[sq]['color'] != current_state[sq]['color']:
@@ -177,12 +184,10 @@ def detect_move(previous_state, current_state):
             elif not previous_state[sq]['has_piece'] and current_state[sq]['has_piece']:
                 to_squares.append(sq)
 
-        # Castling: 2 pieces moved, 2 destinations
         if len(from_squares) == 2 and len(to_squares) == 2:
             piece_color = current_state[to_squares[0]]['color']
             return from_squares, to_squares, piece_color, None, True
 
-        # Capture
         if len(to_squares) == 1 and len(from_squares) >= 1:
             to_square = to_squares[0]
             piece_color = current_state[to_square]['color']
@@ -204,14 +209,13 @@ def detect_move(previous_state, current_state):
 
 
 def get_human_move_from_cv(move_start_state, current_display_state):
-    """Returns UCI string or None if detection failed."""
     from_square, to_square, piece_color, captured_color, is_valid = detect_move(
         move_start_state, current_display_state
     )
     if not is_valid or from_square is None or to_square is None:
         return None
-    if isinstance(from_square, list):  # Castling
-        return None  # Handle separately if needed
+    if isinstance(from_square, list):
+        return None
     return from_square + to_square
 
 
@@ -222,6 +226,7 @@ def get_human_move_from_cv(move_start_state, current_display_state):
 squares_init = [f"{file}{rank}" for file in "hgfedcba" for rank in range(1, 9)]
 maximum_contours = {square: 0 for square in squares_init}
 calibrated = False
+
 
 def main():
     global maximum_contours, calibrated, squares
@@ -243,30 +248,38 @@ def main():
     analysis_interval = 1.0
     board_state = {}
     current_display_state = {}
-    pending_sf_move = None
+
+    # ── TWO-PRESS STATE ──
+    # 'silver' = waiting for human to press m
+    # 'gold'   = human already pressed m, now waiting for stockfish press m
+    current_turn = "silver"
+    pending_sf_move = None  # holds stockfish's computed move between the two presses
+
     move_history = []
+    captured_pieces = []
     waiting_for_move = False
     move_start_state = None
     last_move_text = ""
     last_move_time = 0
     move_display_duration = 5.0
 
-    current_turn = "white (silver)"
-    turn_text = "Silver's turn"
-
     print("📸 Camera running...")
-    print("Press 'b' to lock board | 's' to start | 'm' after move | 'r' reset | 'q' quit")
+    print("Press 'b' to lock | 's' to start | 'm' to confirm move | 'g' restart | 'r' reset | 'q' quit")
+
+    ui.push_status("Waiting — lock board with 'b'")
 
     while True:
         ret, frame = cap.read()
         if not ret:
             continue
-        lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
-        cv2.imshow("LAB : ", lab)
+
         display_frame = frame.copy()
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        #hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-        #cv2.imshow('hsv',hsv)
+        hsv  = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        lab  = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+        cv2.imshow('hsv', hsv)
+        cv2.imshow('LAB', lab)
+
         found, corners = cv2.findChessboardCorners(
             gray, pattern_size,
             cv2.CALIB_CB_ADAPTIVE_THRESH + cv2.CALIB_CB_NORMALIZE_IMAGE +
@@ -276,24 +289,24 @@ def main():
         key = cv2.waitKey(1) & 0xFF
 
         if found:
-            corners = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
+            corners   = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
             new_inner = corners.reshape(7, 7, 2)
 
             if not board_locked:
                 inner_corners = new_inner
-                full_corners = extrapolate_corners(inner_corners)
+                full_corners  = extrapolate_corners(inner_corners)
                 squares, squares_info = extract_8x8_squares(frame, full_corners)
-                board_state = analyze_board_state(squares, squares_info, maximum_contours)
+                board_state           = analyze_board_state(squares, squares_info, maximum_contours)
                 current_display_state = board_state.copy()
                 display_board_state(board_state)
                 display_frame = draw_chessboard_grid(display_frame, full_corners, current_display_state)
-
                 cv2.putText(display_frame, "Calibrating...", (50, 150),
                             cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
 
                 if key == ord('b'):
                     board_locked = True
                     print("🔒 Board locked! Place pieces, then press 's'.")
+                    ui.push_status("Board locked — place pieces then press 's'")
 
         if board_locked and full_corners is not None:
             squares, squares_info = extract_8x8_squares(frame, full_corners)
@@ -302,7 +315,7 @@ def main():
                 for _ in range(100):
                     squares, squares_info = extract_8x8_squares(frame, full_corners)
                     for square_name, square_img in squares.items():
-                        g = cv2.cvtColor(square_img, cv2.COLOR_BGR2GRAY)
+                        g    = cv2.cvtColor(square_img, cv2.COLOR_BGR2GRAY)
                         blur = cv2.GaussianBlur(g, (9, 9), 0)
                         edges = cv2.Canny(blur, 50, 150)
                         edge_density = np.sum(edges > 0) / edges.size
@@ -314,7 +327,7 @@ def main():
             if current_time - last_analysis_time > analysis_interval:
                 latest_board_state = analyze_board_state(squares, squares_info, maximum_contours)
                 if not game_started:
-                    board_state = latest_board_state.copy()
+                    board_state           = latest_board_state.copy()
                     current_display_state = board_state.copy()
                 elif waiting_for_move:
                     current_display_state = latest_board_state.copy()
@@ -327,9 +340,10 @@ def main():
                 cv2.putText(display_frame, "SETUP - Place pieces then press 's'",
                             (20, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 165, 0), 2)
             else:
-                turn_color = (255, 255, 255) if current_turn == "white (silver)" else (255, 215, 0)
-                cv2.putText(display_frame, turn_text, (20, y_offset),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, turn_color, 2)
+                turn_label = "Silver's turn" if current_turn == "silver" else f"Stockfish → press 'm' to execute: {pending_sf_move.uci() if pending_sf_move else '?'}"
+                turn_color = (255, 255, 255) if current_turn == "silver" else (255, 215, 0)
+                cv2.putText(display_frame, turn_label, (20, y_offset),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, turn_color, 2)
                 y_offset += 30
                 cv2.putText(display_frame, "Make move then press 'm'",
                             (20, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
@@ -340,188 +354,167 @@ def main():
 
             silver_count = sum(1 for info in current_display_state.values()
                                if info['has_piece'] and info['color'] == 'white (silver)')
-            gold_count = sum(1 for info in current_display_state.values()
-                             if info['has_piece'] and info['color'] == 'blue (gold)')
-            cv2.putText(display_frame, f"Silver: {silver_count} | Gold: {gold_count} | Moves: {len(move_history)}",
+            gold_count   = sum(1 for info in current_display_state.values()
+                               if info['has_piece'] and info['color'] == 'blue (gold)')
+            cv2.putText(display_frame,
+                        f"Silver: {silver_count} | Gold: {gold_count} | Moves: {len(move_history)}",
                         (20, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
 
             status = "BOARD LOCKED" + (" - GAME ACTIVE" if game_started else " - SETUP")
-            color = (0, 255, 0) if game_started else (255, 165, 0)
+            color  = (0, 255, 0) if game_started else (255, 165, 0)
         else:
             status = "CALIBRATING - Show chessboard"
-            color = (0, 165, 255)
+            color  = (0, 165, 255)
 
         cv2.putText(display_frame, status, (20, 40),
                     cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
         cv2.imshow("Chessboard Detection", display_frame)
 
-        # ── KEY HANDLING ──
+        # ── KEY HANDLING ──────────────────────────────────────────
+
         if key == ord('q'):
             break
 
+        # ── FULL RESET ──
         elif key == ord('r'):
-            pending_sf_move = None
-            board_locked = False
-            game_started = False
-            inner_corners = None
-            full_corners = None
-            board_state = {}
+            board_locked   = False
+            game_started   = False
+            inner_corners  = None
+            full_corners   = None
+            board_state    = {}
             current_display_state = {}
-            move_history = []
+            move_history   = []
             captured_pieces = []
             waiting_for_move = False
             move_start_state = None
-            current_turn = "white (silver)"
-            turn_text = "Silver's turn"
+            current_turn   = "silver"
+            pending_sf_move = None
             last_move_text = ""
-            calibrated = False
+            calibrated     = False
             maximum_contours = {sq: 0 for sq in squares_init}
             if board:
                 board.reset()
+            ui.push_reset()
+            ui.push_status("Full reset — show board to calibrate")
             print("🔄 Full reset.")
+
+        # ── GAME-ONLY RESTART ──
         elif key == ord('g') and board_locked:
-            # Reset game state only — keep board locked, corners, and calibration
-            game_started = False
-            pending_sf_move = None
+            game_started    = False
             waiting_for_move = False
             move_start_state = None
-            move_history = []
+            pending_sf_move  = None
+            move_history    = []
             captured_pieces = []
-            current_turn = "white (silver)"
-            turn_text = "Silver's turn"
-            last_move_text = ""
-            last_move_time = 0
-            board_state = current_display_state.copy()
-
+            current_turn    = "silver"
+            last_move_text  = ""
+            last_move_time  = 0
+            board_state     = current_display_state.copy()
             if board:
                 board.reset()
-
+            ui.push_reset()
+            ui.push_status("Game restarted — press 's' to begin")
             print("🔄 Game restarted! Board locked, calibration kept. Press 's' to start.")
+
+        # ── START GAME ──
         elif key == ord('s') and board_locked and not game_started:
-
-
-            game_started = True
+            game_started     = True
             waiting_for_move = True
-            board_state = current_display_state.copy()
+            board_state      = current_display_state.copy()
             move_start_state = board_state.copy()
-            captured_pieces = []
+            captured_pieces  = []
+            current_turn     = "silver"
+            pending_sf_move  = None
             if board:
-                board.reset()  # Reset python-chess to standard start
+                board.reset()
+            ui.push_status("Silver's turn — make your move then press 'm'")
             print("🎮 Game started! Silver's turn.")
 
-
+        # ── 'm' PRESS ──────────────────────────────────────────────
         elif key == ord('m') and board_locked and game_started and waiting_for_move:
-
             print("\n--- Checking for move ---")
 
-            if current_turn == "white (silver)":
-
-                # ── HUMAN MOVE ──
-
+            # ════════════════════════════════
+            # PRESS 1 — Silver's turn
+            # CV detects the move, pushed to browser
+            # Stockfish computes reply and stores it
+            # ════════════════════════════════
+            if current_turn == "silver":
                 uci_move = get_human_move_from_cv(move_start_state, current_display_state)
 
                 if uci_move is None:
-
                     print("❌ No valid move detected. Try again.")
-
+                    ui.push_status("No move detected ❌ — move your piece then press 'm'")
                 else:
-
                     if apply_human_move(uci_move):
-
                         from_sq = uci_move[:2]
-
-                        to_sq = uci_move[2:]
-
-                        last_move_text = f"Silver: {from_sq} -> {to_sq}"
-
+                        to_sq   = uci_move[2:]
+                        last_move_text = f"Silver: {from_sq} → {to_sq}"
                         last_move_time = time.time()
+                        move_history.append({'uci': uci_move, 'player': 'silver'})
+                        print(f"✅ Silver move applied: {uci_move}")
 
-                        move_history.append({'uci': uci_move, 'player': current_turn})
+                        # ── push silver move to browser ──
+                        ui.push_move(from_sq, to_sq, player='silver')
 
-                        print(f"✅ Human move applied: {uci_move}")
-
-                        # Snapshot board AFTER human move, before Stockfish physically moves
-
-                        board_state = current_display_state.copy()
-
+                        # snapshot after silver's move
+                        board_state      = current_display_state.copy()
                         move_start_state = board_state.copy()
 
-                        # Switch turn to Stockfish — user must press 'm' again after moving pieces
-
-                        current_turn = "blue (gold)"
-
-                        turn_text = "Stockfish's turn — compute move then press 'm'"
-
-                        # Stockfish computes best move now and stores it
-
+                        # stockfish computes NOW, stored for next press
                         sf_move = get_best_move(time_limit=2.0)
-
                         if sf_move:
-
-                            print(
-                                f"🤖 Stockfish suggests: {sf_move.uci()} — make that move on the board, then press 'm'")
-
-                            last_move_text = f"Stockfish move to make: {sf_move.uci()}"
-
-                            last_move_time = time.time()
-
-                            # Store pending move so next 'm' press can apply it
-
                             pending_sf_move = sf_move
-
+                            print(f"🤖 Stockfish ready: {sf_move.uci()} — press 'm' again to execute")
+                            last_move_text = f"Stockfish will play: {sf_move.uci()} — press 'm'"
+                            last_move_time = time.time()
+                            # flash suggestion on browser
+                            ui.push_sf_suggestion(sf_move.uci())
+                            ui.push_status(
+                                f"Stockfish: <b style='color:#c8a951'>{sf_move.uci()}</b> — press 'm' to execute"
+                            )
+                            current_turn = "gold"
                         else:
-
-                            print("❌ Stockfish couldn't find a move (game over?)")
-
-                            pending_sf_move = None
-
+                            print("❌ Stockfish has no moves — game over?")
+                            ui.push_status("Game over — Stockfish has no moves")
                     else:
-
                         print(f"❌ Illegal move '{uci_move}'")
+                        ui.push_status(f"Illegal move: {uci_move} ❌ — try again")
 
-
-            elif current_turn == "blue (gold)":
-
-                # ── STOCKFISH MOVE CONFIRMATION ──
-
-                # Player physically moved the piece on the board, now confirm it
-
+            # ════════════════════════════════
+            # PRESS 2 — Stockfish's turn
+            # Executes the stored move, pushed to browser
+            # ════════════════════════════════
+            elif current_turn == "gold":
                 if pending_sf_move:
-
                     applied = apply_stockfish_move(pending_sf_move)
-
                     if applied:
-
-                        print(f"✅ Stockfish move confirmed: {applied}")
-
-                        last_move_text = f"Stockfish played: {applied}"
-
+                        print(f"✅ Stockfish move executed: {applied}")
+                        last_move_text = f"Stockfish: {applied}"
                         last_move_time = time.time()
-
                         move_history.append({'uci': applied, 'player': 'stockfish'})
 
+                        # ── push stockfish move to browser ──
+                        ui.push_move(applied[:2], applied[2:], player='gold')
+                        ui.push_eval(get_eval_score())
                     else:
-
                         print("❌ Could not apply Stockfish move")
-
+                        ui.push_status("Stockfish move error ❌")
                 else:
+                    print("❌ No pending Stockfish move")
+                    ui.push_status("No Stockfish move pending ❌")
 
-                    print("❌ No pending Stockfish move found")
-
-                board_state = current_display_state.copy()
-
+                board_state      = current_display_state.copy()
                 move_start_state = board_state.copy()
+                current_turn     = "silver"
+                pending_sf_move  = None
+                ui.push_status("Silver's turn — make your move then press 'm'")
 
-                current_turn = "white (silver)"
-
-                turn_text = "Silver's turn"
-
-                pending_sf_move = None
+    # ── CLEANUP ──
     cap.release()
     cv2.destroyAllWindows()
     if engine:
         engine.quit()
-
     print(f"\n✅ Done | Moves: {len(move_history)}")
 
 
